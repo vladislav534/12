@@ -12,6 +12,11 @@ from config import DATA_DIR, REPORT_DIR, TIMEFRAME_LABEL, VERBOSE
 # отключаем лишние ворнинги от NumPy (divide/invalid)
 np.seterr(divide='ignore', invalid='ignore')
 warnings.simplefilter("ignore", category=RuntimeWarning)
+import numpy as np
+import warnings
+
+np.seterr(divide='ignore', invalid='ignore')
+warnings.simplefilter("ignore", category=RuntimeWarning)
 
 def load_all_series() -> dict[str, pd.DataFrame]:
     """
@@ -40,7 +45,7 @@ def pair_lag_corr(
     series_b: pd.Series,
     max_lag: int
 ) -> tuple[int, float]:
-    df = pd.concat([series_a, series_b], axis=1, join="inner", keys=["a","b"])
+    df = pd.concat([series_a, series_b], axis=1, join="inner", keys=["a", "b"])
     if df["a"].std() == 0 or df["b"].std() == 0:
         return 0, 0.0
 
@@ -63,47 +68,36 @@ def pair_lag_corr(
 
 
 
+
 from plotly.subplots import make_subplots
 
 def build_overlay_figure(df1: pd.DataFrame,
                          df2: pd.DataFrame,
                          s1: str,
                          s2: str) -> go.Figure:
-    """
-    Две шкалы Y: левая — для s1, правая — для s2.
-    """
-    # Гарантируем хронологический порядок
-    df1 = df1.sort_index()
-    df2 = df2.sort_index()
+    # делаем inner-join по времени, чтобы X-оси совпадали
+    df = pd.concat([df1["close"], df2["close"]],
+                   axis=1, join="inner", keys=[s1, s2]).dropna()
 
-    # Создаём фигуру с двумя Y
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # Левая ось Y (первая серия)
     fig.add_trace(
         go.Scatter(
-            x=df1.index,
-            y=df1["close"],
-            mode="lines",
-            name=s1,
+            x=df.index, y=df[s1],
+            mode="lines", name=s1,
             line=dict(width=1, color="cyan")
         ),
         secondary_y=False
     )
-
-    # Правая ось Y (вторая серия)
     fig.add_trace(
         go.Scatter(
-            x=df2.index,
-            y=df2["close"],
-            mode="lines",
-            name=s2,
+            x=df.index, y=df[s2],
+            mode="lines", name=s2,
             line=dict(width=1, dash="dot", color="magenta")
         ),
         secondary_y=True
     )
 
-    # Общие настройки макета
     fig.update_layout(
         title=f"{s1} vs {s2} — {TIMEFRAME_LABEL}",
         template="plotly_dark",
@@ -112,22 +106,12 @@ def build_overlay_figure(df1: pd.DataFrame,
         margin=dict(t=50, b=40, l=60, r=60),
         height=350
     )
-
-    # Настройки осей
     fig.update_xaxes(title_text="Time", rangeslider_visible=False)
-
-    fig.update_yaxes(
-        title_text=f"{s1} price",
-        secondary_y=False,
-        showgrid=False
-    )
-    fig.update_yaxes(
-        title_text=f"{s2} price",
-        secondary_y=True,
-        showgrid=False
-    )
+    fig.update_yaxes(title_text=f"{s1} price", secondary_y=False, showgrid=False)
+    fig.update_yaxes(title_text=f"{s2} price", secondary_y=True, showgrid=False)
 
     return fig
+
 
 
 # в файле analyzer.py замените функцию generate_multi_period_correlation_report
@@ -228,20 +212,33 @@ def generate_multi_period_correlation_report(
         parts_norm = []
         for _, row in df_norm.iterrows():
             s1, s2, cv = row["sym1"], row["sym2"], row["corr"]
-            div = build_overlay_figure(sliced[s1], sliced[s2], s1, s2) \
-                  .to_html(full_html=False, include_plotlyjs="cdn")
+
+            df_ab = pd.concat(
+                [sliced[s1][["close"]], sliced[s2][["close"]]],
+                axis=1, join="inner", keys=[s1, s2]
+            ).dropna()
+            df1 = pd.DataFrame({"close": df_ab[s1]}, index=df_ab.index)
+            df2 = pd.DataFrame({"close": df_ab[s2]}, index=df_ab.index)
+
+            div = build_overlay_figure(df1, df2, s1, s2) \
+                .to_html(full_html=False, include_plotlyjs="cdn")
             parts_norm.append(f"<h5>{s1}–{s2} (corr={cv:.2f})</h5>{div}")
 
         parts_lag = []
         for _, row in df_lag.iterrows():
-            s1, s2, lag_val, cv = (
-                row["sym1"], row["sym2"], row["lag"], row["corr"]
-            )
-            div = build_overlay_figure(sliced[s1], sliced[s2], s1, s2) \
-                  .to_html(full_html=False, include_plotlyjs="cdn")
-            parts_lag.append(
-                f"<h5>{s1}–{s2} (lag={lag_val}, corr={cv:.2f})</h5>{div}"
-            )
+            s1, s2, lag_val, cv = row["sym1"], row["sym2"], row["lag"], row["corr"]
+
+            df_ab = pd.concat(
+                [sliced[s1][["close"]], sliced[s2][["close"]]],
+                axis=1, join="inner", keys=[s1, s2]
+            ).dropna()
+            df1 = pd.DataFrame({"close": df_ab[s1]}, index=df_ab.index)
+            df2 = pd.DataFrame({"close": df_ab[s2]}, index=df_ab.index)
+
+            div = build_overlay_figure(df1, df2, s1, s2) \
+                .to_html(full_html=False, include_plotlyjs="cdn")
+            parts_lag.append(f"<h5>{s1}–{s2} (lag={lag_val}, corr={cv:.2f})</h5>{div}")
+
 
         return inner_nav_tpl.format(
             pfx       = label.replace("d",""),
